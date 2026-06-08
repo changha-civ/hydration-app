@@ -429,7 +429,7 @@ export default function App() {
     setWeatherLoading(false);
   }
 
-  // ── 물 추가 ─────────────────────────────────────────────────────
+  // ── 물 추가 / 수정 ───────────────────────────────────────────────
   function addWater(ml) {
     setRipple(true);
     setTimeout(() => setRipple(false), 700);
@@ -450,9 +450,51 @@ export default function App() {
       } else if (!prev.bonusEarned) {
         const pct = Math.round((newIntake / prev.goal) * 100);
         showToast(`+${ml}ml 💧  ${pct}% — ${Math.max(prev.goal - newIntake, 0).toLocaleString()}ml 남음`);
+      } else {
+        showToast(`+${ml}ml 추가 💧`);
       }
       const next = { ...prev, intake: newIntake, bonusEarned: prev.bonusEarned || justDone, earnedPts };
       S.set(`hyd:day:${today()}`, next);
+      return next;
+    });
+  }
+
+  function rollbackPointsIfNeeded(prev, nextIntake) {
+    if (!prev.bonusEarned || nextIntake >= prev.goal || !prev.earnedPts) {
+      return { earnedPts: prev.earnedPts, bonusEarned: prev.bonusEarned };
+    }
+
+    const newTotal = Math.max(totalPtsRef.current - prev.earnedPts, 0);
+    setTotalPts(newTotal);
+    totalPtsRef.current = newTotal;
+    S.set("hyd:totalPts", newTotal);
+
+    setHistory((oldHistory) => {
+      const nextHistory = oldHistory.filter((h) => h.date !== today());
+      S.set("hyd:history", nextHistory);
+      return nextHistory;
+    });
+
+    return { earnedPts: 0, bonusEarned: false };
+  }
+
+  function removeWater(ml) {
+    setDaily((prev) => {
+      const newIntake = Math.max(prev.intake - ml, 0);
+      const rollback = rollbackPointsIfNeeded(prev, newIntake);
+      const next = { ...prev, intake: newIntake, ...rollback };
+      S.set(`hyd:day:${today()}`, next);
+      showToast(`-${ml}ml 되돌림 ↩️`);
+      return next;
+    });
+  }
+
+  function resetWater() {
+    setDaily((prev) => {
+      const rollback = rollbackPointsIfNeeded(prev, 0);
+      const next = { ...prev, intake: 0, ...rollback };
+      S.set(`hyd:day:${today()}`, next);
+      showToast("오늘 섭취량을 초기화했어요 ↩️");
       return next;
     });
   }
@@ -720,8 +762,8 @@ export default function App() {
             <div style={{ height: "100%", width: `${pct}%`, background: `linear-gradient(90deg, ${theme.w2}, ${theme.w1})`, borderRadius: 3, transition: "width 0.8s ease", boxShadow: `0 0 10px ${theme.glow}80` }} />
           </div>
 
-          {/* 음수 버튼 */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 14 }}>
+          {/* 물 섭취 버튼 */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
             {[
               { ml: 200, emoji: "🥛", label: "+200ml", sub: "종이컵 1잔" },
               { ml: 500, emoji: "🍵", label: "+500ml", sub: "텀블러" },
@@ -737,6 +779,24 @@ export default function App() {
                 <div style={{ color: "rgba(255,255,255,0.4)", fontSize: 11, marginTop: 2 }}>{b.sub}</div>
               </button>
             ))}
+          </div>
+
+          {/* 되돌리기 버튼 */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+            <button onClick={() => removeWater(200)} className="btn"
+              style={{ padding: "13px 8px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, color: "rgba(255,255,255,0.82)", backdropFilter: "blur(10px)", fontSize: 14, fontWeight: 700 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.14)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
+            >
+              ↩️ -200ml 되돌리기
+            </button>
+            <button onClick={resetWater} className="btn"
+              style={{ padding: "13px 8px", background: "rgba(239,68,68,0.16)", border: "1px solid rgba(248,113,113,0.28)", borderRadius: 16, color: "#fecaca", backdropFilter: "blur(10px)", fontSize: 14, fontWeight: 700 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.24)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.16)"; }}
+            >
+              🧹 오늘 기록 초기화
+            </button>
           </div>
 
           {/* 알림 버튼 */}
