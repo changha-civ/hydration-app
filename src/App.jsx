@@ -305,6 +305,7 @@ function WaterCup({ pct, theme, intake, goal }) {
 //  메인 앱
 // ══════════════════════════════════════════════════════════════════
 export default function App() {
+  const KMA_API_KEY = import.meta.env.VITE_KMA_API_KEY || "";
   const [screen, setScreen] = useState("loading");
   const [profile, setProfile] = useState({ name: "", weight: 65 });
   const [nameVal, setNameVal] = useState("");
@@ -313,8 +314,7 @@ export default function App() {
   const [totalPts, setTotalPts] = useState(0);
   const [weather, setWeather] = useState(null);
   const [goalCalc, setGoalCalc] = useState(null);
-  const [apiKeyInput, setApiKeyInput] = useState("");
-  const [savedApiKey, setSavedApiKey] = useState("");
+  const [savedApiKey, setSavedApiKey] = useState(KMA_API_KEY);
   const [weatherLoading, setWeatherLoading] = useState(false);
   const [toast, setToast] = useState("");
   const [history, setHistory] = useState([]);
@@ -340,15 +340,14 @@ export default function App() {
   useEffect(() => { initApp(); }, []);
 
   async function initApp() {
-    const [prof, pts, key, hist, prevDay] = await Promise.all([
+    const [prof, pts, hist, prevDay] = await Promise.all([
       S.get("hyd:profile"), S.get("hyd:totalPts", 0),
-      S.get("hyd:apiKey", ""), S.get("hyd:history", []),
+      S.get("hyd:history", []),
       S.get("hyd:currentDay", ""),
     ]);
     setTotalPts(pts);
     totalPtsRef.current = pts;
-    setSavedApiKey(key);
-    setApiKeyInput(key);
+    setSavedApiKey(KMA_API_KEY);
     setHistory(hist);
 
     const curDay = today();
@@ -429,7 +428,7 @@ export default function App() {
     setWeatherLoading(false);
   }
 
-  // ── 물 추가 ─────────────────────────────────────────────────────
+  // ── 물 추가 / 수정 ───────────────────────────────────────────────
   function addWater(ml) {
     setRipple(true);
     setTimeout(() => setRipple(false), 700);
@@ -450,9 +449,51 @@ export default function App() {
       } else if (!prev.bonusEarned) {
         const pct = Math.round((newIntake / prev.goal) * 100);
         showToast(`+${ml}ml 💧  ${pct}% — ${Math.max(prev.goal - newIntake, 0).toLocaleString()}ml 남음`);
+      } else {
+        showToast(`+${ml}ml 추가 💧`);
       }
       const next = { ...prev, intake: newIntake, bonusEarned: prev.bonusEarned || justDone, earnedPts };
       S.set(`hyd:day:${today()}`, next);
+      return next;
+    });
+  }
+
+  function rollbackPointsIfNeeded(prev, nextIntake) {
+    if (!prev.bonusEarned || nextIntake >= prev.goal || !prev.earnedPts) {
+      return { earnedPts: prev.earnedPts, bonusEarned: prev.bonusEarned };
+    }
+
+    const newTotal = Math.max(totalPtsRef.current - prev.earnedPts, 0);
+    setTotalPts(newTotal);
+    totalPtsRef.current = newTotal;
+    S.set("hyd:totalPts", newTotal);
+
+    setHistory((oldHistory) => {
+      const nextHistory = oldHistory.filter((h) => h.date !== today());
+      S.set("hyd:history", nextHistory);
+      return nextHistory;
+    });
+
+    return { earnedPts: 0, bonusEarned: false };
+  }
+
+  function removeWater(ml) {
+    setDaily((prev) => {
+      const newIntake = Math.max(prev.intake - ml, 0);
+      const rollback = rollbackPointsIfNeeded(prev, newIntake);
+      const next = { ...prev, intake: newIntake, ...rollback };
+      S.set(`hyd:day:${today()}`, next);
+      showToast(`-${ml}ml 되돌림 ↩️`);
+      return next;
+    });
+  }
+
+  function resetWater() {
+    setDaily((prev) => {
+      const rollback = rollbackPointsIfNeeded(prev, 0);
+      const next = { ...prev, intake: 0, ...rollback };
+      S.set(`hyd:day:${today()}`, next);
+      showToast("오늘 섭취량을 초기화했어요 ↩️");
       return next;
     });
   }
@@ -527,7 +568,7 @@ export default function App() {
     setDaily(init);
     await S.set(`hyd:day:${today()}`, init);
     setScreen("main");
-    fetchWeather(prof, savedApiKey);
+    fetchWeather(prof, KMA_API_KEY);
     showToast(`환영해요, ${prof.name}님! 오늘도 수분 충전 💧`);
   }
 
@@ -536,9 +577,8 @@ export default function App() {
     if (!w || w < 20 || w > 300) { showToast("올바른 체중을 입력해주세요"); return; }
     const prof = { name: nameVal.trim() || profile.name, weight: w };
     await S.set("hyd:profile", prof);
-    await S.set("hyd:apiKey", apiKeyInput.trim());
     setProfile(prof);
-    setSavedApiKey(apiKeyInput.trim());
+    setSavedApiKey(KMA_API_KEY);
     if (weather) {
       const gc = calcGoal(w, weather);
       setGoalCalc(gc);
@@ -549,7 +589,7 @@ export default function App() {
       });
     }
     showToast("💾 설정이 저장됐어요!");
-    fetchWeather(prof, apiKeyInput.trim());
+    fetchWeather(prof, KMA_API_KEY);
   }
 
   // ── 파생 값 ─────────────────────────────────────────────────────
@@ -720,8 +760,8 @@ export default function App() {
             <div style={{ height: "100%", width: `${pct}%`, background: `linear-gradient(90deg, ${theme.w2}, ${theme.w1})`, borderRadius: 3, transition: "width 0.8s ease", boxShadow: `0 0 10px ${theme.glow}80` }} />
           </div>
 
-          {/* 음수 버튼 */}
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 14 }}>
+          {/* 물 섭취 버튼 */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 12 }}>
             {[
               { ml: 200, emoji: "🥛", label: "+200ml", sub: "종이컵 1잔" },
               { ml: 500, emoji: "🍵", label: "+500ml", sub: "텀블러" },
@@ -739,6 +779,24 @@ export default function App() {
             ))}
           </div>
 
+          {/* 되돌리기 버튼 */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
+            <button onClick={() => removeWater(200)} className="btn"
+              style={{ padding: "13px 8px", background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 16, color: "rgba(255,255,255,0.82)", backdropFilter: "blur(10px)", fontSize: 14, fontWeight: 700 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.14)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(255,255,255,0.07)"; }}
+            >
+              ↩️ -200ml 되돌리기
+            </button>
+            <button onClick={resetWater} className="btn"
+              style={{ padding: "13px 8px", background: "rgba(239,68,68,0.16)", border: "1px solid rgba(248,113,113,0.28)", borderRadius: 16, color: "#fecaca", backdropFilter: "blur(10px)", fontSize: 14, fontWeight: 700 }}
+              onMouseEnter={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.24)"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.background = "rgba(239,68,68,0.16)"; }}
+            >
+              🧹 오늘 기록 초기화
+            </button>
+          </div>
+
           {/* 알림 버튼 */}
           <button onClick={toggleNotif} className="btn" style={{
             width: "100%", padding: 13,
@@ -749,6 +807,10 @@ export default function App() {
           }}>
             {notifEnabled ? "🔔 알림 켜짐 — 4시간마다 · 오후 6시 특별 알림" : "🔕 알림 활성화 (4시간 간격 + 오후 6시 정산)"}
           </button>
+
+          <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, textAlign: "center", lineHeight: 1.6, marginTop: 12 }}>
+            본 서비스는 기상청 단기예보 API와 Open-Meteo 날씨 데이터를 활용합니다.
+          </p>
         </div>
       )}
 
@@ -832,16 +894,6 @@ export default function App() {
             </div>
           </div>
 
-          {/* API 키 */}
-          <div style={{ ...glassCard, marginBottom: 14 }}>
-            <h3 style={sectionLabel}>기상청 API 키</h3>
-            <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 12, lineHeight: 1.7, marginBottom: 14 }}>
-              <a href="https://www.data.go.kr" target="_blank" style={{ color: "#38bdf8" }}>data.go.kr</a>에서 <strong style={{ color: "rgba(255,255,255,0.65)" }}>"기상청 단기예보 조회서비스"</strong> 신청 후 <strong style={{ color: "rgba(255,255,255,0.65)" }}>디코딩된 서비스키</strong>를 입력하세요. 미입력 시 Open-Meteo로 자동 대체됩니다.
-            </p>
-            <input value={apiKeyInput} onChange={(e) => setApiKeyInput(e.target.value)} placeholder="기상청 서비스키 입력..." type="password"
-              style={{ ...inputStyle, fontSize: 13 }} />
-            {savedApiKey && <p style={{ color: "#6ee7b7", fontSize: 12, marginTop: 8 }}>✅ API 키 저장됨</p>}
-          </div>
 
           <button onClick={saveSettings} className="btn" style={{ ...primaryBtn, marginBottom: 14 }}>💾 설정 저장</button>
 
@@ -874,17 +926,9 @@ export default function App() {
             </div>
           </div>
 
-          {/* 기상청 API 안내 */}
-          <div style={{ background: "rgba(255,255,255,0.04)", borderRadius: 16, padding: 16, border: "1px solid rgba(255,255,255,0.07)" }}>
-            <p style={{ color: "rgba(255,255,255,0.45)", fontSize: 12, lineHeight: 1.85 }}>
-              <strong style={{ color: "rgba(255,255,255,0.65)" }}>📌 기상청 API 연동 안내</strong><br />
-              • 브라우저 환경에서는 CORS 제한으로 직접 API 호출이 차단될 수 있어요<br />
-              • 이 경우 Open-Meteo 서비스로 자동 대체되어 동일한 날씨 정보를 제공해요<br />
-              • 서버(Node.js/Python 등) 배포 환경에서는 CORS 없이 기상청 API 직접 사용 가능<br />
-              • 위경도 → 격자 변환 (Lambert CC 투영법) 알고리즘이 앱 내에 구현되어 있어요<br />
-              • API 응답 항목: TMX(최고기온), REH(습도), SKY(하늘상태), PTY(강수형태)
-            </p>
-          </div>
+          <p style={{ color: "rgba(255,255,255,0.35)", fontSize: 11, textAlign: "center", lineHeight: 1.6, marginTop: 12 }}>
+            본 서비스는 기상청 단기예보 API와 Open-Meteo 날씨 데이터를 활용합니다.
+          </p>
         </div>
       )}
 
